@@ -4,82 +4,78 @@ package game
 import (
 	"context"
 	"log"
-	"os"
+	"snake-game-distributed/database"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type Score struct {
-	Nome   string    `bson:"nome"`
-	Pontos int       `bson:"pontos"`
-	Data   time.Time `bson:"data"`
+	PlayerID primitive.ObjectID `bson:"_id,omitempty"`
+	Nome     string             `bson:"nome"`
+	Pontos   int                `bson:"pontos"`
+	Data     time.Time          `bson:"data"`
 }
 
 var (
-	scoresCollection *mongo.Collection
-	isDocker         bool
-	client           *mongo.Client // mantido para desconexão futura se precisar
+	scoresCollection  *mongo.Collection
+	playersCollection *mongo.Collection
+	isDocker          bool
+	DBConnected       bool = false // AQUI! indica se o MongoDB ta online
 )
 
-func initDB() {
-	if os.Getenv("MONGO_URI") != "" || os.Getenv("DOCKER_ENV") != "" {
-		isDocker = true
-		uri := os.Getenv("MONGO_URI")
-		if uri == "" {
-			uri = "mongodb://mongo1:27017,mongo2:27017,mongo3:27017/trabalho?replicaSet=rs0&connect=direct"
-		}
-		connectWithRetry(uri)
+func InitDB() {
+
+	if database.DBConnected {
+		db := database.Client.Database("trabalho")
+
+		scoresCollection = db.Collection("snake_scores")
+		playersCollection = db.Collection("players")
+
+		DBConnected = true
+		log.Println("Collections prontas: snake_scores e players")
 	} else {
 		log.Println("Modo local detectado — scores serão salvos apenas na sessão (sem MongoDB)")
 	}
 }
 
-func connectWithRetry(uri string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	var err error
-	client, err = mongo.Connect(ctx, options.Client().ApplyURI(uri))
-	if err != nil {
-		log.Fatalf("Falha ao criar cliente MongoDB: %v", err)
-	}
-
-	for i := 0; i < 30; i++ {
-		if err = client.Ping(ctx, nil); err == nil {
-			scoresCollection = client.Database("trabalho").Collection("snake_scores")
-			log.Println("MongoDB Replica Set conectado com sucesso!")
-			return
-		}
-		log.Printf("Aguardando MongoDB... (tentativa %d/30) - erro: %v", i+1, err)
-		time.Sleep(2 * time.Second)
-	}
-
-	log.Println("MongoDB não disponível após 30 tentativas — scores não serão persistidos")
-	scoresCollection = nil
-}
-
-func SaveScore(name string, points int) {
-	if scoresCollection == nil || !isDocker {
-		log.Printf("Score local: %s — %d pontos", name, points)
+// db.go  ← substitua a função antiga por esta
+func SaveScore(player *Player, points int) {
+	if player == nil {
+		log.Println("SaveScore: player é nil, ignorando")
 		return
 	}
 
+	// 1. Atualiza o melhor score do jogador (em memória + banco)
+	player.UpdateBestScore(points)
+
+	// 2. Se não tem MongoDB (modo local), só loga e sai
+	if playersCollection == nil || scoresCollection == nil || !isDocker {
+		log.Printf("[LOCAL] Score registrado: %s — %d pontos (melhor: %d)",
+			player.Username, points, player.BestScore)
+		return
+	}
+
+	// 3. Salva no ranking geral
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := scoresCollection.InsertOne(ctx, bson.M{
-		"nome":   name,
-		"pontos": points,
-		"data":   time.Now(),
-	})
+	scoreDoc := bson.M{
+		"player_id": player.ID,       // importante para consultas futuras
+		"nome":      player.Username, // continua mostrando no ranking
+		"pontos":    points,
+		"data":      time.Now(),
+	}
 
+	_, err := scoresCollection.InsertOne(ctx, scoreDoc)
 	if err != nil {
-		log.Printf("Erro ao salvar score no MongoDB: %v", err)
+		log.Printf("Erro ao salvar score no ranking: %v", err)
 	} else {
-		log.Printf("Score salvo com sucesso: %s — %d pontos", name, points)
+		log.Printf("Score salvo no ranking: %s — %d pontos (melhor: %d)",
+			player.Username, points, player.BestScore)
 	}
 }
 

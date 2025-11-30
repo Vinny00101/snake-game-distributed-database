@@ -2,6 +2,7 @@ package game
 
 import (
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -9,30 +10,31 @@ import (
 )
 
 type Game struct {
-	arena       *Arena
-	isRunning   bool
-	score       int
-	userID      string
-	bonusActive bool
-	bonusType   string
-	bonusTimer  *time.Timer
-	speed       time.Duration
-	menuSnake   []Coord
-	menuDir     Coord
-	menuTicker  *time.Ticker
-	menuMutex   sync.Mutex
-	stopChan    chan bool
+	arena         *Arena
+	isRunning     bool
+	score         int
+	userID        string
+	CurrentPlayer *Player
+	bonusActive   bool
+	bonusType     string
+	bonusTimer    *time.Timer
+	speed         time.Duration
+	menuSnake     []Coord
+	menuDir       Coord
+	menuTicker    *time.Ticker
+	menuMutex     sync.Mutex
+	stopChan      chan bool
 }
 
 func NewGame() *Game {
-	initDB()
 	return &Game{
-		arena:     newArena(60, 25),
-		userID:    generateUserID(),
-		speed:     120 * time.Millisecond,
-		menuSnake: []Coord{{X: 5, Y: 5}, {X: 4, Y: 5}, {X: 3, Y: 5}},
-		menuDir:   Coord{X: 1, Y: 0},
-		stopChan:  make(chan bool),
+		arena:         newArena(60, 25),
+		userID:        "visitante",
+		speed:         120 * time.Millisecond,
+		menuSnake:     []Coord{{X: 5, Y: 5}, {X: 4, Y: 5}, {X: 3, Y: 5}},
+		menuDir:       Coord{X: 1, Y: 0},
+		stopChan:      make(chan bool),
+		CurrentPlayer: nil,
 	}
 }
 
@@ -47,6 +49,8 @@ func (g *Game) Start() {
 	termbox.SetInputMode(termbox.InputEsc)
 	termbox.HideCursor()
 
+	g.showAuthScreen()
+
 	g.showMainMenu()
 }
 
@@ -58,6 +62,174 @@ func (g *Game) cleanup() {
 		g.bonusTimer.Stop()
 	}
 	close(g.stopChan)
+}
+
+func (g *Game) showAuthScreen() {
+	options := []string{"Fazer Login", "Criar Conta", "Sair do Jogo"}
+	selected := 0
+
+	for {
+		termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
+		width, height := termbox.Size()
+
+		statusText := "OFFLINE"
+		statusColor := termbox.ColorRed | termbox.AttrBold
+
+		if DBConnected {
+			statusText = "ONLINE"
+			statusColor = termbox.ColorGreen | termbox.AttrBold
+		}
+
+		drawText(g.arena.X+g.arena.Width-10, g.arena.Y-3, statusColor, termbox.ColorDefault, statusText)
+
+		title := "SNAKE GO - UFPI 2025"
+		subtitle := "Ally • Vini • Kleber"
+		drawText((width-len(title))/2, height/2-10, termbox.ColorGreen|termbox.AttrBold, termbox.ColorDefault, title)
+		drawText((width-len(subtitle))/2, height/2-8, termbox.ColorCyan, termbox.ColorDefault, subtitle)
+
+		for i, option := range options {
+			x := (width - 15) / 2
+			y := height/2 - 1 + i*2
+
+			fgColor := termbox.ColorWhite
+			if i == selected {
+				fgColor = termbox.ColorYellow | termbox.AttrBold
+				drawText(x-3, y, fgColor, termbox.ColorDefault, ">")
+			}
+
+			drawText(x, y, fgColor, termbox.ColorDefault, option)
+		}
+
+		controls := "Use ↑↓ para navegar, ENTER para selecionar, ESC para sair"
+		drawText((width-len(controls))/2, height-4, termbox.ColorDarkGray, termbox.ColorDefault, controls)
+
+		termbox.Flush()
+
+		ev := termbox.PollEvent()
+		if ev.Type == termbox.EventKey {
+			switch ev.Key {
+			case termbox.KeyArrowUp:
+				selected = (selected - 1 + len(options)) % len(options)
+			case termbox.KeyArrowDown:
+				selected = (selected + 1) % len(options)
+			case termbox.KeyEnter:
+				switch selected {
+				case 0:
+					if g.loginScreen() {
+						return
+					}
+				case 1:
+					g.registerScreen()
+
+				case 2:
+					termbox.Close()
+					os.Exit(0)
+				}
+			case termbox.KeyEsc:
+				termbox.Close()
+				os.Exit(0)
+			}
+		}
+	}
+}
+
+func (g *Game) inputString(prompt string, y int) string {
+	buf := []rune{}
+	width, _ := termbox.Size()
+	x := (width - len(prompt) - 30) / 2
+
+	for {
+		termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
+		drawText(x, y-2, termbox.ColorWhite, termbox.ColorDefault, prompt)
+		drawText(x+len(prompt)+2, y-2, termbox.ColorCyan, termbox.ColorDefault, string(buf))
+		drawText(x, y, termbox.ColorDarkGray, termbox.ColorDefault, "ENTER → confirmar | BACKSPACE → apagar | ESC → cancelar")
+		termbox.Flush()
+
+		ev := termbox.PollEvent()
+		if ev.Type == termbox.EventKey {
+			if ev.Key == termbox.KeyEnter && len(buf) > 0 {
+				return string(buf)
+			}
+			if ev.Key == termbox.KeyEsc {
+				return ""
+			}
+			if ev.Key == termbox.KeyBackspace || ev.Key == termbox.KeyBackspace2 {
+				if len(buf) > 0 {
+					buf = buf[:len(buf)-1]
+				}
+			} else if ev.Ch != 0 {
+				buf = append(buf, ev.Ch)
+			}
+		}
+	}
+}
+
+func (g *Game) loginScreen() bool {
+	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
+	w, h := termbox.Size()
+	drawText(w/2-12, h/2-4, termbox.ColorCyan|termbox.AttrBold, termbox.ColorDefault, "LOGIN")
+
+	username := g.inputString("Usuario:", h/2)
+	if username == "" {
+		return false
+	}
+
+	password := g.inputString("Senha:", h/2+2)
+	if password == "" {
+		return false
+	}
+
+	player, err := AuthenticatePlayer(username, password)
+	if err != nil {
+		drawText(w/2-20, h/2+6, termbox.ColorRed, termbox.ColorDefault, "Erro: "+err.Error())
+		drawText(w/2-15, h/2+8, termbox.ColorWhite, termbox.ColorDefault, "Pressione qualquer tecla...")
+		termbox.Flush()
+		termbox.PollEvent()
+		return false
+	}
+
+	g.CurrentPlayer = player
+	g.userID = player.Username
+
+	drawText(w/2-20, h/2+6, termbox.ColorGreen|termbox.AttrBold, termbox.ColorDefault, "Login realizado com sucesso!")
+	drawText(w/2-20, h/2+8, termbox.ColorYellow, termbox.ColorDefault, "Bem-vindo, "+player.Username+"!")
+	termbox.Flush()
+	time.Sleep(1500 * time.Millisecond)
+	return true
+}
+
+func (g *Game) registerScreen() {
+	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
+	w, h := termbox.Size()
+	drawText(w/2-12, h/2-4, termbox.ColorCyan|termbox.AttrBold, termbox.ColorDefault, "CRIAR CONTA")
+
+	username := g.inputString("Novo usuario:", h/2)
+	if len(username) < 3 {
+		g.showMessage("Usuario deve ter pelo menos 3 caracteres", termbox.ColorRed)
+		return
+	}
+
+	password := g.inputString("Nova senha:", h/2+2)
+	if len(password) < 4 {
+		g.showMessage("Senha deve ter pelo menos 4 caracteres", termbox.ColorRed)
+		return
+	}
+
+	_, err := RegisterPlayer(username, password)
+	if err != nil {
+		g.showMessage("Erro: "+err.Error(), termbox.ColorRed)
+		return
+	}
+	g.showMessage("Conta criada com sucesso! Faca login agora.", termbox.ColorGreen)
+
+}
+
+func (g *Game) showMessage(text string, color termbox.Attribute) {
+	w, h := termbox.Size()
+	drawText(w/2-len(text)/2, h/2+6, color, termbox.ColorDefault, text)
+	drawText(w/2-20, h/2+8, termbox.ColorWhite, termbox.ColorDefault, "Pressione qualquer tecla para continuar...")
+	termbox.Flush()
+	termbox.PollEvent()
 }
 
 func (g *Game) showMainMenu() {
@@ -553,7 +725,11 @@ func (g *Game) activateBonus(bonusType string) {
 
 func (g *Game) gameOver() {
 	// salva pontuacao
-	SaveScore(g.userID, g.score)
+	if g.CurrentPlayer != nil {
+		SaveScore(g.CurrentPlayer, g.score)
+	} else {
+		SaveScore(&Player{Username: g.userID}, g.score)
+	}
 
 	// limpar timer do bônus
 	if g.bonusTimer != nil {
