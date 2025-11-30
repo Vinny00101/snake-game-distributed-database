@@ -288,6 +288,33 @@ func (g *Game) startGame() {
 }
 
 func (g *Game) handleInput(ev termbox.Event) {
+	// cheats: suposto a bugs
+	if ev.Type == termbox.EventKey {
+		switch ev.Ch {
+		case 'g', 'G': // god mode
+			g.arena.Snake.Body = append(g.arena.Snake.Body, g.arena.Snake.Body[len(g.arena.Snake.Body)-1])
+			g.arena.Snake.Body = append(g.arena.Snake.Body, g.arena.Snake.Body[len(g.arena.Snake.Body)-1])
+			g.arena.AddMessage("god mode, isso e uma maldicao", 3*time.Second)
+		case 'p', 'P': // +1000 pontos instantaneos
+			g.arena.Points += 1000
+			g.arena.AddMessage("adm desligado, voce recebeu +1000 pts", 3*time.Second)
+		case 'l', 'L': // subir de nível
+			g.arena.Level += 5
+			g.arena.increaseDifficulty()
+			g.arena.AddMessage("voce recebeu uma dadiva! level +5", 3*time.Second)
+		case 'b', 'B': // spawn boss instantâneo
+			boss := newBoss(g.arena.Width, g.arena.Height, g.arena.Snake)
+			g.arena.Bosses = append(g.arena.Bosses, boss)
+			g.arena.AddMessage("um bug foi encontrado, um estrangeiro apareceu", 4*time.Second)
+		case 'k', 'K': // matar todos os bosses
+			for _, boss := range g.arena.Bosses {
+				boss.IsAlive = false
+			}
+			g.arena.AddMessage("uma bencao divina extinguiu os estrangeiros", 4*time.Second)
+		}
+	}
+
+	// mapeamento das teclas
 	switch ev.Key {
 	case termbox.KeyArrowUp:
 		g.arena.Snake.ChangeDir(0, -1)
