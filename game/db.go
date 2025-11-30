@@ -1,4 +1,4 @@
-// falta configurar o banco de dados distribuído MongoDB Replica Set completamente
+// db.go
 package game
 
 import (
@@ -18,15 +18,18 @@ type Score struct {
 	Data   time.Time `bson:"data"`
 }
 
-var scoresCollection *mongo.Collection
-var isDocker = false
+var (
+	scoresCollection *mongo.Collection
+	isDocker         bool
+	client           *mongo.Client // mantido para desconexão futura se precisar
+)
 
 func initDB() {
 	if os.Getenv("MONGO_URI") != "" || os.Getenv("DOCKER_ENV") != "" {
 		isDocker = true
 		uri := os.Getenv("MONGO_URI")
 		if uri == "" {
-			uri = "mongodb://mongo1:27017,mongo2:27017,mongo3:27017/trabalho?replicaSet=rs0"
+			uri = "mongodb://mongo1:27017,mongo2:27017,mongo3:27017/trabalho?replicaSet=rs0&connect=direct"
 		}
 		connectWithRetry(uri)
 	} else {
@@ -35,22 +38,27 @@ func initDB() {
 }
 
 func connectWithRetry(uri string) {
-	var client *mongo.Client
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	var err error
+	client, err = mongo.Connect(ctx, options.Client().ApplyURI(uri))
+	if err != nil {
+		log.Fatalf("Falha ao criar cliente MongoDB: %v", err)
+	}
 
 	for i := 0; i < 30; i++ {
-		client, err = mongo.Connect(context.TODO(), options.Client().ApplyURI(uri))
-		if err == nil {
-			if err = client.Ping(context.TODO(), nil); err == nil {
-				scoresCollection = client.Database("trabalho").Collection("snake_scores")
-				log.Println("MongoDB Replica Set conectado com sucesso!")
-				return
-			}
+		if err = client.Ping(ctx, nil); err == nil {
+			scoresCollection = client.Database("trabalho").Collection("snake_scores")
+			log.Println("MongoDB Replica Set conectado com sucesso!")
+			return
 		}
-		log.Printf("Aguardando MongoDB... (tentativa %d) - erro: %v", i+1, err)
+		log.Printf("Aguardando MongoDB... (tentativa %d/30) - erro: %v", i+1, err)
 		time.Sleep(2 * time.Second)
 	}
-	log.Println("MongoDB não disponível — scores não serão salvos")
+
+	log.Println("MongoDB não disponível após 30 tentativas — scores não serão persistidos")
+	scoresCollection = nil
 }
 
 func SaveScore(name string, points int) {
@@ -59,42 +67,48 @@ func SaveScore(name string, points int) {
 		return
 	}
 
-	_, err := scoresCollection.InsertOne(context.TODO(), bson.M{
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := scoresCollection.InsertOne(ctx, bson.M{
 		"nome":   name,
 		"pontos": points,
 		"data":   time.Now(),
 	})
 
 	if err != nil {
-		log.Println("Erro ao salvar no MongoDB:", err)
+		log.Printf("Erro ao salvar score no MongoDB: %v", err)
 	} else {
-		log.Printf("Score salvo no MongoDB distribuído: %s — %d", name, points)
+		log.Printf("Score salvo com sucesso: %s — %d pontos", name, points)
 	}
 }
 
 func GetTop10() []Score {
+	// modo local ou MongoDB indisponível → retorna mock
 	if scoresCollection == nil || !isDocker {
-		// fallback para dados mock para teste local
 		return []Score{
-			{Nome: "JOGADOR01", Pontos: 150, Data: time.Now()},
-			{Nome: "JOGADOR02", Pontos: 100, Data: time.Now()},
-			{Nome: generateUserID(), Pontos: 80, Data: time.Now()},
+			{Nome: "JOGADOR01", Pontos: 250, Data: time.Now().Add(-time.Hour)},
+			{Nome: "JOGADOR02", Pontos: 180, Data: time.Now().Add(-2 * time.Hour)},
+			{Nome: generateUserID(), Pontos: 120, Data: time.Now()},
 		}
 	}
 
-	cursor, err := scoresCollection.Find(context.TODO(),
-		bson.M{},
-		options.Find().SetSort(bson.D{{"pontos", -1}}).SetLimit(10))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
+	cursor, err := scoresCollection.Find(ctx,
+		bson.M{},
+		options.Find().SetSort(bson.D{{Key: "pontos", Value: -1}}).SetLimit(10),
+	)
 	if err != nil {
-		log.Println("Erro ao buscar scores:", err)
+		log.Printf("Erro ao buscar ranking: %v", err)
 		return nil
 	}
-	defer cursor.Close(context.TODO())
+	defer cursor.Close(ctx)
 
 	var results []Score
-	if err := cursor.All(context.TODO(), &results); err != nil {
-		log.Println("Erro ao decodificar scores:", err)
+	if err := cursor.All(ctx, &results); err != nil {
+		log.Printf("Erro ao decodificar scores: %v", err)
 		return nil
 	}
 

@@ -2,6 +2,7 @@ package game
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/nsf/termbox-go"
@@ -19,6 +20,8 @@ type Game struct {
 	menuSnake   []Coord
 	menuDir     Coord
 	menuTicker  *time.Ticker
+	menuMutex   sync.Mutex
+	stopChan    chan bool
 }
 
 func NewGame() *Game {
@@ -29,6 +32,7 @@ func NewGame() *Game {
 		speed:     120 * time.Millisecond,
 		menuSnake: []Coord{{X: 5, Y: 5}, {X: 4, Y: 5}, {X: 3, Y: 5}},
 		menuDir:   Coord{X: 1, Y: 0},
+		stopChan:  make(chan bool),
 	}
 }
 
@@ -38,6 +42,7 @@ func (g *Game) Start() {
 		panic(err)
 	}
 	defer termbox.Close()
+	defer g.cleanup()
 
 	termbox.SetInputMode(termbox.InputEsc)
 	termbox.HideCursor()
@@ -45,39 +50,35 @@ func (g *Game) Start() {
 	g.showMainMenu()
 }
 
-// TODO: preciso refatorar isso aqui depois pois a cobra está toda bugada
+func (g *Game) cleanup() {
+	if g.menuTicker != nil {
+		g.menuTicker.Stop()
+	}
+	if g.bonusTimer != nil {
+		g.bonusTimer.Stop()
+	}
+	close(g.stopChan)
+}
+
 func (g *Game) showMainMenu() {
 	selected := 0
 	options := []string{"Iniciar Jogo", "Ver Ranking", "Sair"}
 
-	// iniciar animação da cobrinha do menu
 	g.menuTicker = time.NewTicker(100 * time.Millisecond)
 	defer g.menuTicker.Stop()
 
-	// goroutine para animar e redesenhar continuamente
-	redrawChan := make(chan bool, 1)
 	go func() {
-		for range g.menuTicker.C {
-			g.animateMenuSnake()
-
+		for {
 			select {
-			case redrawChan <- true:
-			default:
+			case <-g.menuTicker.C:
+				g.animateMenuSnake()
+			case <-g.stopChan:
+				return
 			}
 		}
 	}()
 
 	for {
-		// verificar se precisa redesenhar devido à animação
-		select {
-		case <-redrawChan:
-			// redesenhar devido à animação
-			g.drawMainMenu(selected, options)
-			termbox.Flush()
-		default:
-			// não precisa redesenhar, não bloquear
-		}
-
 		g.drawMainMenu(selected, options)
 		termbox.Flush()
 
@@ -113,7 +114,7 @@ func (g *Game) animateMenuSnake() {
 
 	newHead := Coord{X: head.X + g.menuDir.X, Y: head.Y + g.menuDir.Y}
 
-	// verifica colisão com bordas e mudar direção
+	// verifica colisao com bordas e mudar direcao
 	if newHead.X <= 1 {
 		g.menuDir = Coord{X: 1, Y: 0}
 	} else if newHead.X >= width-2 {
@@ -123,7 +124,7 @@ func (g *Game) animateMenuSnake() {
 	} else if newHead.Y >= height-2 {
 		g.menuDir = Coord{X: 0, Y: -1}
 	} else {
-		// verificr se está na área do menu para evitar sobreposição
+		// verificar se esta na area do menu para evitar sobreposicao
 		menuLeft := (width - 20) / 2
 		menuRight := menuLeft + 20
 		menuTop := height/2 - 2
@@ -139,21 +140,21 @@ func (g *Game) animateMenuSnake() {
 		}
 	}
 
-	// Recalcular nova posição com direção atualizada
+	// reaclcula nova posição com direção atualizada
 	head = g.menuSnake[0]
 	newHead = Coord{X: head.X + g.menuDir.X, Y: head.Y + g.menuDir.Y}
 
-	// Atualizar posição
 	g.menuSnake = append([]Coord{newHead}, g.menuSnake...)
-	g.menuSnake = g.menuSnake[:len(g.menuSnake)-1]
+	if len(g.menuSnake) > 10 { // tamanho da cobra do menu
+		g.menuSnake = g.menuSnake[:10]
+	}
 }
 
 func (g *Game) drawMainMenu(selected int, options []string) {
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
-
 	width, height := termbox.Size()
 
-	// desenhar essa cobrinha animada toda bugada no fundo
+	// desenhar cobrinha animada no fundo
 	for i, seg := range g.menuSnake {
 		color := termbox.ColorGreen
 		if i == 0 {
@@ -164,7 +165,7 @@ func (g *Game) drawMainMenu(selected int, options []string) {
 
 	// game title
 	title := "SNAKE GO - UFPI 2025"
-	subtitle := "Ally,Vini, Kleber Version.0.5"
+	subtitle := "Ally,Vini, Kleber Versao.0.7"
 	drawText((width-len(title))/2, height/2-5, termbox.ColorGreen|termbox.AttrBold, termbox.ColorDefault, title)
 	drawText((width-len(subtitle))/2, height/2-4, termbox.ColorCyan, termbox.ColorDefault, subtitle)
 
@@ -308,11 +309,31 @@ func (g *Game) update() {
 	g.score = g.arena.Points
 }
 
+func (g *Game) drawMessages() {
+	now := time.Now()
+	y := g.arena.Y - 4
+	for i := len(g.arena.Messages) - 1; i >= 0; i-- {
+		msg := g.arena.Messages[i]
+		if now.Sub(msg.CreatedAt) < msg.Duration {
+			if y >= 1 {
+				drawText(g.arena.X+2, y, termbox.ColorYellow|termbox.AttrBold, termbox.ColorDefault, msg.Text)
+				y--
+			}
+		}
+	}
+}
+
 func (g *Game) drawGame() {
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
 
 	// desenhar borda da arena
 	g.drawArenaBorder()
+
+	// desenhar obstáculos
+	g.drawObstacles()
+
+	// desenhar bosses
+	g.drawBosses()
 
 	// desenhar cobra
 	g.drawSnake()
@@ -320,7 +341,10 @@ func (g *Game) drawGame() {
 	// desenhar comida
 	g.drawFood()
 
-	// desenhar HUD
+	// desenhar mensagens
+	g.drawMessages()
+
+	// desenhar HUD expandido
 	g.drawHUD()
 
 	termbox.Flush()
@@ -343,6 +367,33 @@ func (g *Game) drawArenaBorder() {
 	for y := g.arena.Y; y < g.arena.Y+g.arena.Height; y++ {
 		termbox.SetCell(g.arena.X-1, y, '│', termbox.ColorWhite, termbox.ColorDefault)
 		termbox.SetCell(g.arena.X+g.arena.Width, y, '│', termbox.ColorWhite, termbox.ColorDefault)
+	}
+}
+
+func (g *Game) drawObstacles() {
+	for _, obs := range g.arena.Obstacles {
+		char := '█'
+		color := termbox.ColorMagenta
+		if obs.IsTemporary {
+			color = termbox.ColorMagenta | termbox.AttrBold
+		}
+		termbox.SetCell(obs.X, obs.Y, char, color, termbox.ColorDefault)
+	}
+}
+
+func (g *Game) drawBosses() {
+	for _, boss := range g.arena.Bosses {
+		if !boss.IsAlive {
+			continue
+		}
+		for i, seg := range boss.Body {
+			color := termbox.ColorRed
+			if i == 0 {
+				color = termbox.ColorRed | termbox.AttrBold
+			}
+			char := '■'
+			termbox.SetCell(seg.X, seg.Y, char, color, termbox.ColorDefault)
+		}
 	}
 }
 
@@ -412,34 +463,35 @@ func (g *Game) drawFood() {
 }
 
 func (g *Game) drawHUD() {
-	// pontuacoes
 	scoreText := fmt.Sprintf("Score: %d", g.score)
-	drawText(g.arena.X, g.arena.Y-2, termbox.ColorYellow, termbox.ColorDefault, scoreText)
+	drawText(g.arena.X+2, g.arena.Y-3, termbox.ColorYellow|termbox.AttrBold, termbox.ColorDefault, scoreText)
 
-	// informa bônus (se ativo)
+	levelText := fmt.Sprintf("Nivel: %d", g.arena.Level)
+	drawText(g.arena.X+2, g.arena.Y-2, termbox.ColorCyan, termbox.ColorDefault, levelText)
+
+	comboText := fmt.Sprintf("Combo: x%d", g.arena.ComboSystem.CurrentCombo+1)
+	drawText(g.arena.X+25, g.arena.Y-2, termbox.ColorMagenta, termbox.ColorDefault, comboText)
+
+	sizeText := fmt.Sprintf("Tamanho: %d", len(g.arena.Snake.Body))
+	drawText(g.arena.X+45, g.arena.Y-2, termbox.ColorWhite, termbox.ColorDefault, sizeText)
+
 	if g.bonusActive {
-		bonusText := fmt.Sprintf("Bonus: %s", g.bonusType)
-		drawText(g.arena.X+g.arena.Width-len(bonusText)-2, g.arena.Y-2,
-			termbox.ColorMagenta|termbox.AttrBold, termbox.ColorDefault, bonusText)
+		bonusText := "BONUS: " + g.bonusType + "!"
+		drawText(g.arena.X+g.arena.Width-len(bonusText)-4, g.arena.Y-3,
+			termbox.ColorYellow|termbox.AttrBold|termbox.AttrBlink, termbox.ColorDefault, bonusText)
 	}
 
-	// tam da cobra
-	sizeText := fmt.Sprintf("Tamanho: %d", len(g.arena.Snake.Body))
-	drawText(g.arena.X+g.arena.Width/2-len(sizeText)/2, g.arena.Y-2,
-		termbox.ColorCyan, termbox.ColorDefault, sizeText)
+	controls := "←↑→↓ mover • ESC sair"
+	drawText(g.arena.X+2, g.arena.Y+g.arena.Height+1,
+		termbox.ColorDarkGray, termbox.ColorDefault, controls)
 
-	// foods na tela
-	foodsText := fmt.Sprintf("Comidas: %d/%d", len(g.arena.Foods), g.arena.maxFoods)
-	drawText(g.arena.X+g.arena.Width-len(foodsText)-2, g.arena.Y+g.arena.Height+1,
+	foodsText := fmt.Sprintf("Frutas: %d/%d", len(g.arena.Foods), g.arena.maxFoods)
+	drawText(g.arena.X+g.arena.Width-len(foodsText)-4, g.arena.Y+g.arena.Height+1,
 		termbox.ColorWhite, termbox.ColorDefault, foodsText)
-
-	// controles
-	controls := "Controles: Setas para mover, ESC para sair"
-	drawText(g.arena.X, g.arena.Y+g.arena.Height+1, termbox.ColorWhite, termbox.ColorDefault, controls)
 }
 
 func (g *Game) activateBonus(bonusType string) {
-	// nao ativa novo bônus se já estiver ativo
+	// nao ativa novo bonus se ja estiver ativo
 	if g.bonusActive {
 		return
 	}
@@ -497,10 +549,18 @@ func (g *Game) gameOver() {
 		scoreText := fmt.Sprintf("Score Final: %d", g.score)
 		drawText((width-len(scoreText))/2, height/2-1, termbox.ColorYellow, termbox.ColorDefault, scoreText)
 
+		// nível alcançado
+		levelText := fmt.Sprintf("Nivel Alcancado: %d", g.arena.Level)
+		drawText((width-len(levelText))/2, height/2, termbox.ColorCyan, termbox.ColorDefault, levelText)
+
+		// max combo
+		comboText := fmt.Sprintf("Max Combo: x%d", g.arena.ComboSystem.MaxCombo+1)
+		drawText((width-len(comboText))/2, height/2+1, termbox.ColorMagenta, termbox.ColorDefault, comboText)
+
 		// op
 		for i, option := range options {
 			x := (width - 20) / 2
-			y := height/2 + 1 + i*2
+			y := height/2 + 3 + i*2
 
 			fgColor := termbox.ColorWhite
 			if i == selected {

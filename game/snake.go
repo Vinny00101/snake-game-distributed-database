@@ -30,6 +30,12 @@ func (s *Snake) Grow() {
 	s.Body = append(s.Body, tail)
 }
 
+func (s *Snake) Shrink() {
+	if len(s.Body) > 3 {
+		s.Body = s.Body[:len(s.Body)-1]
+	}
+}
+
 func (s *Snake) ChangeDir(dx, dy int) {
 	newDir := Coord{X: dx, Y: dy}
 
@@ -62,6 +68,16 @@ func (s *Snake) SelfCollision() bool {
 	head := s.Head()
 	for i, seg := range s.Body {
 		if i > 0 && seg.X == head.X && seg.Y == head.Y {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Snake) CollidesWith(other *Snake) bool {
+	head := s.Head()
+	for _, seg := range other.Body {
+		if seg.X == head.X && seg.Y == head.Y {
 			return true
 		}
 	}
