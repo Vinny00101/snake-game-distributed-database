@@ -1,0 +1,17 @@
+services:
+  snake:
+    build: .
+    environment:
+      - MONGO_URI=mongodb://mongo1:27017,mongo2:27017,mongo3:27017/trabalho?replicaSet=rs0
+      - DOCKER_ENV=true
+    depends_on:
+      - mongo1
+    networks:
+      - mongo_network
+    stdin_open: true
+    tty: true
+
+networks:
+  mongo_network:
+    external: true
+    name: mongo_network
