@@ -7,41 +7,58 @@ import (
 )
 
 func newBoss(arenaWidth, arenaHeight int, playerSnake *Snake) *Boss {
-	var start Coord
-	playerHead := playerSnake.Head()
+	side := rand.Intn(4)
+	var head Coord
 
-	// spawn no lado oposto ao jogador
-	if playerHead.X < arenaWidth/2 {
-		start.X = arenaWidth - 5
-	} else {
-		start.X = 4
-	}
-	if playerHead.Y < arenaHeight/2 {
-		start.Y = arenaHeight - 5
-	} else {
-		start.Y = 4
+	switch side {
+	case 0: // esquerda
+		head = Coord{X: 3, Y: rand.Intn(arenaHeight-8) + 5}
+	case 1: // direita
+		head = Coord{X: arenaWidth - 4, Y: rand.Intn(arenaHeight-8) + 5}
+	case 2: // cima
+		head = Coord{X: rand.Intn(arenaWidth-8) + 5, Y: 4}
+	default: // baixo
+		head = Coord{X: rand.Intn(arenaWidth-8) + 5, Y: arenaHeight - 5}
 	}
 
-	// garante posição livre
-	for i := 0; i < 20; i++ {
-		candidate := Coord{
-			X: rand.Intn(arenaWidth-8) + 4,
-			Y: rand.Intn(arenaHeight-8) + 4,
-		}
-		if !playerSnake.IsOnPosition(candidate) {
-			start = candidate
+	// prevencao para nao nascer em cima do jogador
+	for i := 0; i < 30; i++ {
+		if !playerSnake.IsOnPosition(head) && !playerSnake.IsOnPosition(Coord{head.X + 1, head.Y}) {
 			break
 		}
+		// tenta outra posição na mesma borda
+		switch side {
+		case 0:
+			head.Y = rand.Intn(arenaHeight-8) + 5
+		case 1:
+			head.Y = rand.Intn(arenaHeight-8) + 5
+		case 2:
+			head.X = rand.Intn(arenaWidth-8) + 5
+		case 3:
+			head.X = rand.Intn(arenaWidth-8) + 5
+		}
 	}
 
-	// direção inicial aleatória segura
-	dir := Coord{X: 1, Y: 0}
-	directions := []Coord{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
-	rand.Shuffle(len(directions), func(i, j int) { directions[i], directions[j] = directions[j], directions[i] })
+	// sempre para DENTRO da arena
+	var dir Coord
+	switch side {
+	case 0:
+		dir = Coord{1, 0} // da esquerda → direita
+	case 1:
+		dir = Coord{-1, 0} // da direita → esquerda
+	case 2:
+		dir = Coord{0, 1} // de cima → baixo
+	case 3:
+		dir = Coord{0, -1} // de baixo → cima
+	}
 
-	body := []Coord{start}
-	for i := 1; i < 8; i++ {
-		body = append(body, Coord{X: start.X - dir.X*i, Y: start.Y - dir.Y*i})
+	// body inicial
+	body := []Coord{head}
+	for i := 1; i < 9; i++ {
+		body = append(body, Coord{
+			X: head.X - dir.X*i,
+			Y: head.Y - dir.Y*i,
+		})
 	}
 
 	return &Boss{
@@ -49,31 +66,31 @@ func newBoss(arenaWidth, arenaHeight int, playerSnake *Snake) *Boss {
 		Dir:      dir,
 		Speed:    160 * time.Millisecond,
 		LastMove: time.Now(),
-		Points:   200,
+		Points:   250,
 		IsAlive:  true,
-		Health:   3, // 3 hits para matar
+		Health:   1, // vida inicial
 	}
 }
 
-// Prioridade do boss: 1º fruta → 2º evitar paredes → 3º perseguir jogador só se muito perto
+// IA do estrangeiro
 func (b *Boss) calculateDirection(playerHead Coord, foods []*Food, arenaWidth, arenaHeight int) Coord {
 	head := b.Body[0]
 
-	// 1. Procurar fruta mais próxima
+	// TODO: 1. PRIORIDADE MAXIMA: ir atras da fruta mais proxima
 	var closestFood *Food
-	minDist := math.MaxFloat64
+	bestDist := 999.0
 	for _, f := range foods {
 		dx := float64(f.X - head.X)
 		dy := float64(f.Y - head.Y)
-		dist := dx*dx + dy*dy
-		if dist < minDist {
-			minDist = dist
+		dist := math.Sqrt(dx*dx + dy*dy)
+		if dist < bestDist {
+			bestDist = dist
 			closestFood = f
 		}
 	}
 
-	// Se tem fruta perto (distância < 15), vai nela
-	if closestFood != nil && minDist < 225 { // 15²
+	// vai atras da fruta se estiver a ate 20 blocos de distancia
+	if closestFood != nil && bestDist < 20 {
 		dx := closestFood.X - head.X
 		dy := closestFood.Y - head.Y
 
@@ -90,40 +107,42 @@ func (b *Boss) calculateDirection(playerHead Coord, foods []*Food, arenaWidth, a
 		}
 	}
 
-	// 2. Se jogador estiver MUITO perto (< 8 blocos), persegue agressivamente
-	dxPlayer := playerHead.X - head.X
-	dyPlayer := playerHead.Y - head.Y
-	if math.Abs(float64(dxPlayer))+math.Abs(float64(dyPlayer)) < 8 {
-		if math.Abs(float64(dxPlayer)) > math.Abs(float64(dyPlayer)) {
-			if dxPlayer > 0 {
+	// 2. so persegue jogador se estiver MUITO PERTO, menos de 6 blocos
+	dxP := playerHead.X - head.X
+	dyP := playerHead.Y - head.Y
+	distToPlayer := math.Abs(float64(dxP)) + math.Abs(float64(dyP))
+	if distToPlayer < 6 {
+		if math.Abs(float64(dxP)) > math.Abs(float64(dyP)) {
+			if dxP > 0 {
 				return Coord{1, 0}
 			}
 			return Coord{-1, 0}
 		} else {
-			if dyPlayer > 0 {
+			if dyP > 0 {
 				return Coord{0, 1}
 			}
 			return Coord{0, -1}
 		}
 	}
 
-	// 3. caso contrário: movimento que evita paredes
+	// 3. random moviment se estiver longe
 	directions := []Coord{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
-	rand.Shuffle(len(directions), func(i, j int) { directions[i], directions[j] = directions[j], directions[i] })
+	rand.Shuffle(len(directions), func(i, j int) {
+		directions[i], directions[j] = directions[j], directions[i]
+	})
 
 	for _, d := range directions {
-		if d == (Coord{-b.Dir.X, -b.Dir.Y}) { // nao volta pra tras
+		if d == (Coord{-b.Dir.X, -b.Dir.Y}) {
 			continue
 		}
 		nx := head.X + d.X
 		ny := head.Y + d.Y
-		if nx > 2 && nx < arenaWidth-3 && ny > 2 && ny < arenaHeight-3 {
+		if nx >= 3 && nx <= arenaWidth-4 && ny >= 3 && ny <= arenaHeight-4 {
 			return d
 		}
 	}
 
-	// ultimo recurso: direção atual
-	return b.Dir
+	return b.Dir // fica parado se encurralado (raro)
 }
 
 func (b *Boss) Move(playerHead Coord, foods []*Food, arenaWidth, arenaHeight int) {

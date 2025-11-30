@@ -2,32 +2,32 @@ package game
 
 import "time"
 
-// Coord representa uma coordenada na arena
+// representa uma coordenada na arena
 type Coord struct {
 	X, Y int
 }
 
-// Tipos de comida
+// de comida
 const (
 	FOOD_NORMAL = iota
 	FOOD_BONUS
 	FOOD_PENALTY
 )
 
-// Tipos de power-ups
+// power-ups
 const (
 	POWERUP_SHIELD = iota
 	POWERUP_GHOST
 	POWERUP_MAGNET
 )
 
-// Tipos de obstáculos
+// obstaculos
 const (
 	OBSTACLE_WALL = iota
 	OBSTACLE_MOVING
 )
 
-// Food representa a comida na arena
+// comida na arena
 type Food struct {
 	Coord
 	Points    int
@@ -36,7 +36,7 @@ type Food struct {
 	Lifetime  time.Duration
 }
 
-// PowerUp representa um power-up na arena
+// power-up na arena
 type PowerUp struct {
 	Coord
 	PowerType int
@@ -44,7 +44,7 @@ type PowerUp struct {
 	Lifetime  time.Duration
 }
 
-// Obstacle representa um obstáculo na arena
+// obstaculo na arena
 type Obstacle struct {
 	Coord
 	ObstacleType int
@@ -53,7 +53,7 @@ type Obstacle struct {
 	Lifetime     time.Duration
 }
 
-// Boss representa uma cobra inimiga
+// estrangeiro inimigo
 type Boss struct {
 	Body     []Coord
 	Dir      Coord
@@ -61,10 +61,10 @@ type Boss struct {
 	LastMove time.Time
 	Points   int
 	IsAlive  bool
-	Health   int // agora é 3 hits para matar
+	Health   int // verificar la no boos.go
 }
 
-// ComboSystem controla o sistema de combos
+// controla o sistema de combos
 type ComboSystem struct {
 	CurrentCombo int
 	LastFoodTime time.Time
@@ -72,7 +72,7 @@ type ComboSystem struct {
 	MaxCombo     int
 }
 
-// GameMessage representa mensagens na tela
+// mensagens na tela
 type GameMessage struct {
 	Text      string
 	CreatedAt time.Time

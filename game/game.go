@@ -311,14 +311,14 @@ func (g *Game) update() {
 
 func (g *Game) drawMessages() {
 	now := time.Now()
-	y := g.arena.Y - 4
+	width, _ := termbox.Size()
+
 	for i := len(g.arena.Messages) - 1; i >= 0; i-- {
 		msg := g.arena.Messages[i]
 		if now.Sub(msg.CreatedAt) < msg.Duration {
-			if y >= 1 {
-				drawText(g.arena.X+2, y, termbox.ColorYellow|termbox.AttrBold, termbox.ColorDefault, msg.Text)
-				y--
-			}
+			x := (width - len(msg.Text)) / 2
+			y := 2 + (len(g.arena.Messages)-1-i)*2
+			drawText(x, y, termbox.ColorYellow|termbox.AttrBold, termbox.ColorDefault, msg.Text)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package game
 
 import (
+	"fmt"
 	"math/rand"
 	"time"
 )
@@ -149,12 +150,43 @@ func (a *Arena) placeObstacle() {
 }
 
 func (a *Arena) trySpawnBoss() {
-	// defini para o nível 2
-	if a.Level >= 2 && len(a.Bosses) == 0 && time.Since(a.lastBossSpawn) > a.bossCooldown {
-		boss := newBoss(a.Width, a.Height, a.Snake)
-		a.Bosses = append(a.Bosses, boss)
-		a.lastBossSpawn = time.Now()
-		a.AddMessage("Um estrangeiro invadiu seu mundo!", 4*time.Second)
+	currentTime := time.Now()
+
+	// quantos bosses devem existir no nivel atual?
+	expectedBossCount := a.Level / 10 // a cada 10 → +1 estrangeiro
+	if a.Level >= 6 {
+		expectedBossCount++ // garante pelo menos 1 no nivel 6
+	}
+
+	aliveCount := 0
+	for _, b := range a.Bosses {
+		if b.IsAlive {
+			aliveCount++
+		}
+	}
+
+	// chance crescente a partir do nivel 3
+	if a.Level >= 3 && aliveCount < expectedBossCount {
+		// chance aumenta com o nivel, tipo, 5% no lvl 3, 10% no 4, ..., 100% no 6+
+		chance := float64(a.Level-2) * 0.05 // 5% por nivel acima de 2
+		if chance > 1.0 {
+			chance = 1.0
+		}
+
+		if rand.Float64() < chance || a.Level >= 6 {
+			if time.Since(a.lastBossSpawn) > 8*time.Second { // evita spawn em sequencia
+				boss := newBoss(a.Width, a.Height, a.Snake)
+				a.Bosses = append(a.Bosses, boss)
+				a.lastBossSpawn = currentTime
+
+				count := len(a.Bosses)
+				if count == 1 {
+					a.AddMessage("Um estrangeiro invadiu seu mundo!", 4*time.Second)
+				} else {
+					a.AddMessage(fmt.Sprintf("Outro estrangeiro chegou! Agora sao %d!", count), 4*time.Second)
+				}
+			}
+		}
 	}
 }
 
@@ -226,10 +258,16 @@ func (a *Arena) updateCombo() {
 }
 
 func (a *Arena) Tick(game *Game) bool {
-	a.Snake.Move()
+	if game.bonusActive && game.bonusType == "VELOCIDADE" {
+		// VELOCIDADE: anda 2 blocos por tick
+		a.Snake.Move()
+		a.Snake.Move()
+	} else {
+		a.Snake.Move()
+	}
 	head := a.Snake.Head()
 
-	// colisoes normais...
+	// colisoes com arena
 	if head.X <= a.X || head.X >= a.X+a.Width-1 ||
 		head.Y <= a.Y || head.Y >= a.Y+a.Height-1 {
 		return false
@@ -245,51 +283,64 @@ func (a *Arena) Tick(game *Game) bool {
 
 	a.trySpawnBoss()
 
-	for i := len(a.Bosses) - 1; i >= 0; i-- {
-		boss := a.Bosses[i]
+	for _, boss := range a.Bosses {
 		if !boss.IsAlive {
-			a.Bosses = append(a.Bosses[:i], a.Bosses[i+1:]...)
 			continue
 		}
 
 		boss.Move(head, a.Foods, a.Width, a.Height)
 
-		// TODO: boss é para comer fruta, talvez esteja bugado
+		// estrangeiro come fruta
 		for j := len(a.Foods) - 1; j >= 0; j-- {
 			food := a.Foods[j]
 			if boss.Head().X == food.X && boss.Head().Y == food.Y {
 				boss.Grow()
 				a.Foods = append(a.Foods[:j], a.Foods[j+1:]...)
-				a.AddMessage("O estrangeiro comeu uma fruta!", 2*time.Second)
+				a.AddMessage("O estrangeiro roubou sua fruta!", 2*time.Second)
 				a.placeFood()
+				break
 			}
 		}
 
-		// hitKill colide com qualquer parte do boss → morre
+		// permitir para so perder pontos, tava muito apelativo ser hitkill
 		if a.Snake.CollidesWith(&Snake{Body: boss.Body}) {
-			return false
+			if a.Points >= 50 {
+				a.Points -= 50
+			} else {
+				a.Points = 0
+			}
+			a.AddMessage("-50 pontos! Cuidado com o estrangeiro!", 2*time.Second)
+			// empurra o jogador
+			tail := a.Snake.Body[len(a.Snake.Body)-1]
+			a.Snake.Body = append(a.Snake.Body, tail)
 		}
 
-		// jogador bate na CABECA do boss → dano
+		// BATER NA CABEÇA DO BOSS = DANO
 		if head.X == boss.Head().X && head.Y == boss.Head().Y {
 			if boss.TakeDamage() {
-
-				a.Points += boss.Points
-				growAmount := len(boss.Body) - 5
-				for k := 0; k < growAmount; k++ {
+				grow := len(boss.Body) - 6
+				if grow < 3 {
+					grow = 3
+				}
+				for i := 0; i < grow; i++ {
 					a.Snake.Grow()
 				}
-				a.Bosses = append(a.Bosses[:i], a.Bosses[i+1:]...)
-				a.AddMessage("ESTRANGEIRO DERROTADO! +"+string(rune(boss.Points))+" pontos e +"+string(rune(growAmount))+" tamanho!", 5*time.Second)
+				a.Points += boss.Points
+				a.AddMessage(fmt.Sprintf("ESTRANGEIRO DERROTADO! +%d pts +%d tamanho!", boss.Points, grow), 5*time.Second)
 			} else {
-				a.AddMessage("Estrangeiro ferido! ("+string(rune(boss.Health))+"/3)", 2*time.Second)
+				a.AddMessage(fmt.Sprintf("Dano no estrangeiro! (%d/3)", boss.Health), 2*time.Second)
 			}
-		} else {
-
-			a.Bosses = append(a.Bosses[:i], a.Bosses[i+1:]...)
-			i--
 		}
 	}
+
+	// remove bosses mortos
+	alive := make([]*Boss, 0)
+	for _, b := range a.Bosses {
+		if b.IsAlive {
+			alive = append(alive, b)
+		}
+	}
+	a.Bosses = alive
 
 	// verifica comidas
 	eatenFoods := make([]*Food, 0)
